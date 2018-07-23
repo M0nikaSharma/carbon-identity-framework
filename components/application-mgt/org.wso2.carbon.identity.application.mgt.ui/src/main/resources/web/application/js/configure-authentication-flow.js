@@ -25,10 +25,11 @@ var localAuthNumber = 0;
 var scriptStringHeader = "function onInitialRequest(context) {";
 var scriptStringContent = [];
 var scriptStringFooter = "}";
-var documentBeforeChange;
+var scriptEnabled = false;
 
 $("#createApp").click(function () {
-    validateAppCreation();
+    return validateAppCreation();
+
 });
 
 var addTemplate = $("#addTemplate");
@@ -65,9 +66,95 @@ var myCodeMirror = CodeMirror.fromTextArea(scriptTextArea, {
 var doc = myCodeMirror.getDoc();
 var editorContent = doc.getValue();
 
+checkScriptDirty();
+
 function validateAppCreation() {
-    var warnCount = 0;
-    var errorCount = 0;
+    if (checkEmptyStep()) {
+        CARBON.showErrorDialog('Some authentication steps do not have authenticators. Add' +
+            ' missing authenticators or delete the empty step.',
+            null, null);
+        return false;
+    }
+
+    if (!scriptIsDirty) {
+        submitFormWithDisabledScript();
+    } else {
+        var showErr = false;
+        var showWarn = false;
+
+        getStepErrorsWarnings($(".stepWarningListContainer"), $(".stepErrorListContainer"));
+        getEditorErrorsWarnings($(".warningListContainer"), $(".errorListContainer"));
+
+        if ($(".messagebox-error-custom li").length > 0) {
+            $(".editor-error-content").show();
+            showErr = true;
+        }
+
+        if ($(".messagebox-warning-custom li").length > 0) {
+            $(".editor-warning-content").show();
+            showWarn = true;
+        }
+
+        if (showErr) {
+            $(".err_warn_text").text('Update script with errors?');
+            showPopupConfirm($(".editor-error-warn-container").html(), "WSO2 Carbon", 250, 550, "OK", "Cancel",
+                submitFormWithDisabledScript, removeHtmlContent);
+        } else if (showWarn) {
+            $(".err_warn_text").text('Update script with warnings?');
+            showPopupConfirm($(".editor-error-warn-container").html(), "WSO2 Carbon", 250, 550, "OK", "Cancel",
+                submitFormWithEnabledScript, removeHtmlContent);
+        } else {
+            submitFormWithEnabledScript();
+        }
+    }
+}
+
+function showDisabledScriptErrorsWarnings() {
+
+    var showErr = false;
+    var showWarn = false;
+
+    getStepErrorsWarnings($(".warn_list"), $(".err_list"));
+    getEditorErrorsWarnings($(".warn_list"), $(".err_list"));
+
+    if ($(".err_list li").length > 0) {
+        $(".err_container").show();
+        showErr = true;
+    }
+
+    if ($(".warn_list li").length > 0) {
+        $(".warn_container").show();
+        showWarn = true;
+    }
+
+    if (showErr || showWarn) {
+        $(".err_warn_container").show();
+    }
+}
+
+function getStepErrorsWarnings(elementWarn, elementErr) {
+    var stepsInUI = getExecuteStepsInUI();
+    var stepsInScript = getExecuteStepsInScript();
+    var stepDifference = diffArray(stepsInUI, stepsInScript);
+
+    if (stepsInUI.length < stepsInScript.length || stepsInUI.length == stepsInScript.length) {
+        if (stepDifference.script.length > 0) {
+            for (var i = 0; i < stepDifference.script.length; ++i) {
+                elementErr.append("<li>Could not find matching Authentication Step for script executeStep <b>"
+                    + stepDifference.script[i] + "</b>.</li>");
+            }
+        }
+    }
+
+    if (stepsInUI.length > stepsInScript.length) {
+        for (var i = 0; i < stepDifference.ui.length; ++i) {
+            elementWarn.append("<li>Could not find matching 'executeStep' function for" +
+                " <span>Step " + stepDifference.ui[i] + ".</span></li>");
+        }
+    }
+}
+
+function getEditorErrorsWarnings(elementWarn, elementErr) {
     myCodeMirror.operation(function () {
         JSHINT(myCodeMirror.getValue());
         for (var i = 0; i < JSHINT.errors.length; ++i) {
@@ -75,44 +162,43 @@ function validateAppCreation() {
             if (!err) {
                 continue;
             } else if (err.code.lastIndexOf("W", 0) === 0) {
-                warnCount++;
+                elementWarn.append("<li>" + err.reason
+                    + "<span>[ Ln: " + err.line + " ch:" + err.character + " ]</span></li>");
             } else {
-                errorCount++;
+                elementErr.append("<li>" + err.reason
+                    + "<span>[ Ln: " + err.line + " ch:" + err.character + " ]</span></li>");
             }
         }
     });
-
-    if (!scriptIsDirty) {
-        submitFormWithDIsabledScript();
-    } else {
-        var stepsInUI = getExecuteStepsInUI();
-        var stepsInScript = getExecuteStepsInScript();
-
-        if (stepsInUI.length < stepsInScript.length){
-            CARBON.showConfirmationDialog('Total number of steps are smaller than that of the Script.',
-                submitFormWithDIsabledScript, null);
-        } else if (stepsInUI.length > stepsInScript.length){
-            CARBON.showConfirmationDialog('Total number of steps are greater than that of the Script.',
-                submitFormWithEnabledScript, null);
-        } else{
-            console.log("missed validation");
-        }
-
-        if (errorCount > 0) {
-            CARBON.showConfirmationDialog('Save script with errors? (Script will not be evaluated and will only be' +
-                ' saved)',
-                submitFormWithDIsabledScript, null);
-        }
-        if (warnCount > 0) {
-            CARBON.showConfirmationDialog('Save script with warnings? (Script will not be evaluated and will only be' +
-                ' saved)',
-                submitFormWithEnabledScript, null);
-        }
-
-    }
 }
 
-function submitFormWithDIsabledScript() {
+$('.show_errors_toggle_buttons a').each(function () {
+    $(this).click(function () {
+        $(this).parent().parent().next().slideToggle();
+        $(this).parent().parent().find('a').each(function () {
+            $(this).toggle();
+        });
+    });
+});
+
+function removeHtmlContent() {
+    $('.editor-error-warn-container li').remove();
+    $('.err_warn_text').empty();
+    $('.editor-error-content, .editor-warning-content').hide();
+}
+
+function checkEmptyStep() {
+    var isEmptyStep = false;
+    $.each($('.step_body'), function () {
+        if ($(this).has(".auth_table > tbody > tr").length == 0) {
+            isEmptyStep = true;
+            return false;
+        }
+    });
+    return isEmptyStep;
+}
+
+function submitFormWithDisabledScript() {
     $("#enableScript").prop("checked", false);
     $("#configure-auth-flow-form").submit();
 }
@@ -231,7 +317,7 @@ $('[data-toggle=template-link]').click(function (e) {
     var authNTemplateInfoTemplate = $('#template-info')[0].innerHTML;
     var compiledTemplate = Handlebars.compile(authNTemplateInfoTemplate);
     var renderedTemplateInfo = compiledTemplate(templateObj);
-    showPopupConfirm(renderedTemplateInfo, templateObj.title, 450, "OK", "Cancel", doReplaceRange, null);
+    showPopupConfirm(renderedTemplateInfo, templateObj.title, 450, null, "OK", "Cancel", doReplaceRange, null);
 
     function doReplaceRange() {
         myCodeMirror.setValue("");
@@ -287,7 +373,7 @@ function highlightNewCode() {
  * Temporary function that serves as the local popup customization till carbon-kernel release
  * This has also been moved to proper codebase in carbon.ui as this is reusable.
  */
-function showPopupConfirm(htmlMessage, title, windowHeight, okButton, cancelButton, callback, windowWidth) {
+function showPopupConfirm(htmlMessage, title, windowHeight, windowWidth, okButton, cancelButton, callback, closeCallback) {
     if (!isHTML(htmlMessage)) {
         htmlMessage = htmlEncode(htmlMessage);
     }
@@ -316,6 +402,9 @@ function showPopupConfirm(htmlMessage, title, windowHeight, okButton, cancelButt
                     "Cancel": function () {
                         jQuery(this).dialog('destroy').remove();
                         jQuery("#dcontainer").empty();
+                        if (closeCallback && typeof closeCallback == "function") {
+                            closeCallback();
+                        }
                         return false;
                     },
                 },
@@ -330,6 +419,9 @@ function showPopupConfirm(htmlMessage, title, windowHeight, okButton, cancelButt
                 close: function () {
                     jQuery(this).dialog('destroy').remove();
                     jQuery("#dcontainer").empty();
+                    if (closeCallback && typeof closeCallback == "function") {
+                        closeCallback();
+                    }
                     return false;
                 },
                 height: windowHeight,
@@ -354,6 +446,9 @@ function showPopupConfirm(htmlMessage, title, windowHeight, okButton, cancelButt
             jQuery('#dialog').dialog("destroy").remove();
             jQuery("#dcontainer").empty();
             jQuery("#dcontainer").html('');
+            if (closeCallback && typeof closeCallback == "function") {
+                closeCallback();
+            }
         });
 
     };
@@ -402,12 +497,17 @@ $("#editorRow").hide();
 checkScriptEnabled();
 
 function checkScriptEnabled() {
-    var scriptEnabled = $("#enableScript").is(":checked");
+    scriptEnabled = $("#enableScript").is(":checked");
     var stepConfigTrigger = $(".authentication_step_config_head");
     var editorRow = $("#editorRow");
 
     if (scriptEnabled) {
         stepConfigTrigger.addClass('active');
+        editorRow.slideDown('fast');
+    }
+
+    if (scriptIsDirty && !scriptEnabled) {
+        showDisabledScriptErrorsWarnings();
         editorRow.slideDown('fast');
     }
 
@@ -442,10 +542,10 @@ function showHideTemplateList() {
     }
 }
 
-function buildScriptString() {
+function buildScriptString(element) {
     var str = "";
     scriptStringContent = [];
-    $(".steps > h2").each(function (index, element) {
+    element.each(function (index, element) {
         scriptStringContent.push("executeStep(" + (index + 1) + ");");
         str += scriptStringContent[index];
     });
@@ -484,8 +584,32 @@ function deleteIDPRow(obj) {
 }
 
 $('body').delegate("a.delete_step", 'click', function (e) {
-    deleteStep(this);
-    buildScriptString();
+    var stepNo = $(this).attr('data-step-no');
+    var executeStepsInScript = getExecuteStepsInScript();
+    var element = $(this);
+
+    if (!scriptIsDirty) {
+        deleteStep(this);
+        buildScriptString($(".steps > h2"));
+    } else {
+        if ($.inArray(parseInt(stepNo), executeStepsInScript) > -1) {
+            if (stepNo == $(".steps > h2").length) {
+                CARBON.showConfirmationDialog('You are deleting a step that is used in the script. Are' +
+                    ' you sure you want to delete? ',
+                    function () {
+                        deleteStep(element);
+                    }, null);
+            } else {
+                CARBON.showConfirmationDialog('You are deleting a step that is used in the script. Are' +
+                    ' you sure you want to delete?\nPlease note that the steps will be reordered.',
+                    function () {
+                        deleteStep(element);
+                    }, null);
+            }
+        } else {
+            deleteStep(element);
+        }
+    }
     e.stopImmediatePropagation();
 });
 
@@ -493,8 +617,30 @@ $('#stepsAddLink').click(function (e) {
     e.preventDefault();
     fromStepsAddLink = true;
     addNewUIStep();
-    buildScriptString();
+    if (!scriptIsDirty) {
+        buildScriptString($(".steps > h2"));
+    }
 });
+
+function checkScriptDirty() {
+    var str = "";
+    scriptStringContent = [];
+    $(".steps > h2").each(function (index, element) {
+        scriptStringContent.push("executeStep(" + (index + 1) + ");");
+        str += scriptStringContent[index];
+    });
+    var scriptComposed = scriptStringHeader + str + scriptStringFooter;
+
+    var editorContent = doc.getValue();
+    var minifiedEditorContent = editorContent.replace(/(?:\r\n|\r|\n)/g, '').replace(/\s/g, '');
+    var minifiedScriptComposed = scriptComposed.replace(/(?:\r\n|\r|\n)/g, '').replace(/\s/g, '');
+
+    if (minifiedEditorContent == "" || minifiedEditorContent == minifiedScriptComposed) {
+        scriptIsDirty = false;
+    } else {
+        scriptIsDirty = true;
+    }
+}
 
 function deleteStep(obj) {
 
@@ -518,6 +664,7 @@ function deleteStep(obj) {
             $(this).attr('id', 'step_head_' + newStepOrderVal);
             $(this).find('input[name="auth_step"]').val(newStepOrderVal);
             $(this).find('.step_order_header').text('Step ' + newStepOrderVal);
+            $(this).find('.delete_step').attr('data-step-no', newStepOrderVal);
 
             //Changes in content
             var contentDiv = $('#step_dev_' + oldStepOrderVal);
@@ -684,22 +831,8 @@ function getExecuteStepsInScript() {
     return stepsIntArray.sort(sortNumber);
 }
 
-doc.on("beforeChange", function (document, changeObj) {
-    documentBeforeChange = editorContent;
-    documentBeforeChange = documentBeforeChange.replace(/(?:\r\n|\r|\n)/g, '').replace(/\s/g, '');
-});
-
 doc.on("change", function (document, changeObj) {
-    var documentAfterChange = document.getValue();
-    documentAfterChange = documentAfterChange.replace(/(?:\r\n|\r|\n)/g, '').replace(/\s/g, '');
-    if (documentAfterChange === documentBeforeChange) {
-        scriptIsDirty = false;
-    } else {
-        scriptIsDirty = true;
-        if (fromTemplateLink || fromStepsAddLink) {
-            scriptIsDirty = false;
-        }
-    }
+    checkScriptDirty();
 });
 
 $('#editorRow').bind('beforeShow', function () {
@@ -735,4 +868,25 @@ function onlyUnique(value, index, self) {
 
 function sortNumber(a, b) {
     return a - b;
+}
+
+/**
+ * Call with a ui array and script array as input params
+ * Ex: diffArray(getExecuteStepsInUI(), getExecuteStepsInScript());
+ */
+function diffArray(arrUI, arrScript) {
+    var difference = {
+        ui: [],
+        script: [],
+    };
+
+    arrUI.map(function (val) {
+        arrScript.indexOf(val) < 0 ? difference.ui.push(val) : '';
+    });
+
+    arrScript.map(function (val) {
+        arrUI.indexOf(val) < 0 ? difference.script.push(val) : '';
+    });
+
+    return difference;
 }
